@@ -255,25 +255,32 @@ GEMINI_TP_PASS_1 = f'''Fokus HANYA "Tambang Puncak". Unpivot data dengan aturan:
 GEMINI_TP_PASS_2 = '''JSON awal: {JSON_SEBELUMNYA}\nSCAN ULANG. Sel sering TERLEWAT di Jumat 5 PM. Jika ada yang terlewat, TAMBAHKAN. Kembalikan JSON revisi.'''
 GEMINI_TP_PASS_3 = '''JSON revisi: {JSON_SEBELUMNYA}\nFinal check: Tidak ada tertinggal di 7 hari, tidak ada jam siluman. Kembalikan JSON sempurna.'''
 
+GEMINI_TIMEOUT = 60  # detik, per call generate_content. Tanpa ini, request bisa hang tanpa batas waktu.
+
 def run_gemini_3_pass(img, prompt1, prompt2, prompt3, module_name, status_box):
+    req_opts = {"timeout": GEMINI_TIMEOUT}
     for model_name in get_model_fallback_list():
         model = genai.GenerativeModel(model_name)
         delay = 5
         for attempt in range(3):
             try:
-                status_box.info(f"⏳ [{module_name}] Pass 1 ({model_name.split('/')[-1]})...")
-                r1 = re.sub(r"^```json|```$", "", model.generate_content([prompt1, img]).text.strip(), flags=re.MULTILINE).strip()
-                status_box.info(f"🔍 [{module_name}] Pass 2 ({model_name.split('/')[-1]})...")
-                r2 = re.sub(r"^```json|```$", "", model.generate_content([prompt2.replace("{JSON_SEBELUMNYA}", r1), img]).text.strip(), flags=re.MULTILINE).strip()
-                status_box.info(f"🛡️ [{module_name}] Pass 3 ({model_name.split('/')[-1]})...")
-                r3 = re.sub(r"^```json|```$", "", model.generate_content([prompt3.replace("{JSON_SEBELUMNYA}", r2), img]).text.strip(), flags=re.MULTILINE).strip()
+                status_box.info(f"⏳ [{module_name}] Pass 1 ({model_name.split('/')[-1]}, percobaan {attempt+1})...")
+                r1 = re.sub(r"^```json|```$", "", model.generate_content([prompt1, img], request_options=req_opts).text.strip(), flags=re.MULTILINE).strip()
+                status_box.info(f"🔍 [{module_name}] Pass 2 ({model_name.split('/')[-1]}, percobaan {attempt+1})...")
+                r2 = re.sub(r"^```json|```$", "", model.generate_content([prompt2.replace("{JSON_SEBELUMNYA}", r1), img], request_options=req_opts).text.strip(), flags=re.MULTILINE).strip()
+                status_box.info(f"🛡️ [{module_name}] Pass 3 ({model_name.split('/')[-1]}, percobaan {attempt+1})...")
+                r3 = re.sub(r"^```json|```$", "", model.generate_content([prompt3.replace("{JSON_SEBELUMNYA}", r2), img], request_options=req_opts).text.strip(), flags=re.MULTILINE).strip()
                 status_box.success(f"✅ [{module_name}] 3-Pass Selesai!")
                 return json.loads(r3)
             except Exception as e:
-                if "429" in str(e) or "503" in str(e):
+                err_str = str(e)
+                if "429" in err_str or "503" in err_str or "Deadline" in err_str or "timeout" in err_str.lower():
+                    status_box.warning(f"⚠️ [{module_name}] {model_name.split('/')[-1]} gagal/timeout ({err_str[:120]}...), retry dalam {delay}s...")
                     time.sleep(delay)
                     delay *= 2
-                else: break
+                else:
+                    status_box.warning(f"⚠️ [{module_name}] {model_name.split('/')[-1]} error tidak bisa di-retry: {err_str[:150]}")
+                    break
     raise Exception(f"{module_name} Gagal via Gemini.")
 
 
@@ -311,11 +318,12 @@ def ge_extract_gems_rewards(ocr_result_list):
 def ge_extract_via_gemini(image_path, api_key):
     if not api_key: return [], []
     try:
+        genai.configure(api_key=api_key, transport="rest")
         models = [m.name for m in genai.list_models() if "generateContent" in m.supported_generation_methods]
         gemini_model = genai.GenerativeModel(next((m for m in models if "1.5-flash" in m), models[0]))
         prompt = """Look at this screenshot of a delivery rider mission app. Find the "TARGET & REWARD" section. It contains exactly 3 tiers, each with a gems target number and S$ reward amount. Return ONLY a raw JSON object: {"gems": [g1, g2, g3], "rewards": [r1, r2, r3]}"""
         img = Image.open(image_path)
-        teks_raw = gemini_model.generate_content([prompt, img]).text
+        teks_raw = gemini_model.generate_content([prompt, img], request_options={"timeout": GEMINI_TIMEOUT}).text
         data = json.loads(re.sub(r'^```json\s*|\s*```$', '', teks_raw.strip()))
         gems = sorted([int(g) for g in data.get("gems", [])])
         rewards = sorted([float(r) for r in data.get("rewards", [])])
@@ -366,7 +374,7 @@ with tab_gt:
     
     if gt_files and st.button("🚀 Ekstrak Greentable", type="primary", key="btn_gt"):
         if not gemini_api_key: st.error("⚠️ API Key Gemini di Sidebar belum diisi!"); st.stop()
-        genai.configure(api_key=gemini_api_key)
+        genai.configure(api_key=gemini_api_key, transport="rest")  # REST lebih stabil di Streamlit Cloud/lokal drpd gRPC (default)
         
         all_mingguan, all_puncak = [], []
         prog_gt = st.progress(0)
