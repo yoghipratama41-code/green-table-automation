@@ -686,18 +686,36 @@ def get_slide_date_replacements(any_date):
 
     return {
         "{date_monday}": date_monday_str,
+        "{date_mon}": date_monday_str,
         "{date_wednesday}": date_wednesday_str,
+        "{date_wed}": date_wednesday_str,
         "{date_thursday}": date_thursday_str,
+        "{date_thur}": date_thursday_str,
+        "{date_thu}": date_thursday_str,
         "{date_friday}": date_friday_str,
+        "{date_fri}": date_friday_str,
         "{date_saturday}": date_saturday_str,
-        "{date_sunday}": date_sunday_str
+        "{date_sat}": date_saturday_str,
+        "{date_sunday}": date_sunday_str,
+        "{date_sun}": date_sunday_str,
     }
 
 def push_to_google_slides(slide_id, tier, vehicle, processed_images_list, log_box):
-    """Menangani upload image ke Google Drive sebagai penampung publik sementara, kemudian update template Google Slides."""
+    """Membuat SALINAN dari template Google Slides terlebih dahulu, baru meng-update salinan
+    tersebut (upload gambar ke Drive sebagai penampung publik sementara, lalu batchUpdate).
+    Master template (slide_id asli) tidak pernah disentuh langsung."""
     creds = get_slides_drive_oauth_creds()
     slides_service = build('slides', 'v1', credentials=creds)
     drive_service = build('drive', 'v3', credentials=creds)
+
+    # Buat salinan presentasi dari template master -- semua perubahan selanjutnya
+    # (replaceAllText, replaceAllShapesWithImage, dst) akan dikenakan ke salinan ini.
+    copy_name = f"Greentable Gems - {tier} {vehicle} - {time.strftime('%Y-%m-%d %H:%M:%S')}"
+    copied_file = drive_service.files().copy(
+        fileId=slide_id, body={'name': copy_name}
+    ).execute()
+    slide_id = copied_file.get('id')
+    log_box.write(f"📄 Salinan presentasi baru dibuat: **{copy_name}**")
     
     requests_body = []
     
@@ -776,13 +794,13 @@ def push_to_google_slides(slide_id, tier, vehicle, processed_images_list, log_bo
         
     # Eksekusi seluruh antrean transaksi batch ke Google Slides API
     if requests_body:
-        log_box.write("⚙️ Memperbarui data teks dan menyisipkan tangkapan layar ke Google Slides secara langsung...")
+        log_box.write("⚙️ Memperbarui data teks dan menyisipkan tangkapan layar ke salinan Google Slides...")
         slides_service.presentations().batchUpdate(
             presentationId=slide_id,
             body={'requests': requests_body}
         ).execute()
         
-    return uploaded_drive_file_ids
+    return uploaded_drive_file_ids, slide_id
 
 # ==========================================
 # 6. UI UTAMA (STREAMLIT APPS)
@@ -1047,15 +1065,15 @@ with tab_gems:
             st.subheader("📊 Memulai Sinkronisasi Presentasi Google Slides...")
             log_slides = st.container()
             try:
-                uploaded_ids = push_to_google_slides(
+                uploaded_ids, new_presentation_id = push_to_google_slides(
                     slide_id=GEMS_SLIDES_ID,
                     tier=selected_tier,
                     vehicle=selected_vehicle,
                     processed_images_list=slides_payload_list,
                     log_box=log_slides
                 )
-                st.success("🎉 Google Slides Master Template berhasil diperbarui dengan sempurna!")
-                st.info(f"🔗 Tautan Template Presentasi: [Buka Google Slides](https://docs.google.com/presentation/d/{GEMS_SLIDES_ID}/edit)")
+                st.success("🎉 Salinan Google Slides berhasil dibuat & diperbarui dengan sempurna!")
+                st.info(f"🔗 Tautan Presentasi Hasil: [Buka Google Slides](https://docs.google.com/presentation/d/{new_presentation_id}/edit)")
             except Exception as slide_err:
                 st.error(f"⚠️ Gagal memperbarui Google Slides: {slide_err}")
         
