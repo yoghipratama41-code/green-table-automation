@@ -34,7 +34,7 @@ TAB_PUNCAK = "Bonus Tambang Puncak_This Week"
 
 # Gems Automator Configuration
 GEMS_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1W6t8fCOPB_dFlWnzHSpVJ66tAnOcHHnMn1jXtHfC2S4/edit?usp=sharing"
-GEMS_SLIDES_ID = "1bKyyrS-w8JNzJzxkB-2Wkp5RmYk1nmEz"  # Target Slide ID sesuai instruksi
+GEMS_SLIDES_ID = "175o7VUG_h7IFAlgiin-2clS1dt-9O4WwD4XnJTozHgc"  # Target Slide ID sesuai instruksi
 GEMS_MUSIC_PATH = "assets/bgm.mp3"
 GEMS_APPS_SCRIPT_WEBHOOK_URL = st.secrets.get("apps_script_webhook_url", "")
 
