@@ -15,6 +15,8 @@ import streamlit.components.v1 as components
 from PIL import Image, ImageEnhance
 
 from google.oauth2.service_account import Credentials
+from google.oauth2.credentials import Credentials as OAuthCredentials
+from google.auth.transport.requests import Request as GoogleAuthRequest
 import google.generativeai as genai
 
 # Tambahan library untuk Google Slides & Drive API
@@ -55,6 +57,21 @@ SCOPES = [
 ]
 
 # ==========================================
+# OAuth (akun user biasa) khusus untuk Slides & Drive
+# ==========================================
+# Service account TIDAK punya storage quota di Drive, sehingga upload gambar via
+# service account akan gagal dengan error "storageQuotaExceeded". Karena itu,
+# khusus untuk push_to_google_slides (upload gambar & update Slides), kita pakai
+# OAuth delegation ke akun Google biasa (refresh token), persis seperti pada
+# app__6_.py yang sudah terbukti berjalan.
+OAUTH_SCOPES = (
+    "https://www.googleapis.com/auth/drive.file "
+    "https://www.googleapis.com/auth/drive.readonly "
+    "https://www.googleapis.com/auth/presentations"
+)
+OAUTH_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token"
+
+# ==========================================
 # 1. KONEKSI GOOGLE SERVICES
 # ==========================================
 @st.cache_resource
@@ -62,6 +79,29 @@ def get_google_credentials():
     return Credentials.from_service_account_info(
         dict(st.secrets["gcp_service_account"]), scopes=SCOPES
     )
+
+@st.cache_resource(ttl=1800)  # cache 30 menit, supaya tidak refresh token tiap rerun/interaksi
+def get_slides_drive_oauth_creds():
+    """
+    Bangun Credentials OAuth dari refresh token yang tersimpan di secrets, khusus
+    dipakai untuk Google Slides & Drive (upload gambar). Ini menghindari error
+    'storageQuotaExceeded' yang muncul kalau upload gambar dilakukan pakai
+    service account (service account tidak punya storage quota di Drive).
+
+    Perlu tiga secrets tambahan: google_client_id, google_client_secret,
+    google_refresh_token (refresh token milik akun Google biasa, bukan service
+    account -- lihat cara generate-nya di app__6_.py / get_refresh_token.py).
+    """
+    creds = OAuthCredentials(
+        token=None,
+        refresh_token=st.secrets["google_refresh_token"],
+        token_uri=OAUTH_TOKEN_ENDPOINT,
+        client_id=st.secrets["google_client_id"],
+        client_secret=st.secrets["google_client_secret"],
+        scopes=OAUTH_SCOPES.split(),
+    )
+    creds.refresh(GoogleAuthRequest())
+    return creds
 
 @st.cache_resource
 def get_spreadsheet():
@@ -655,7 +695,7 @@ def get_slide_date_replacements(any_date):
 
 def push_to_google_slides(slide_id, tier, vehicle, processed_images_list, log_box):
     """Menangani upload image ke Google Drive sebagai penampung publik sementara, kemudian update template Google Slides."""
-    creds = get_google_credentials()
+    creds = get_slides_drive_oauth_creds()
     slides_service = build('slides', 'v1', credentials=creds)
     drive_service = build('drive', 'v3', credentials=creds)
     
