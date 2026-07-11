@@ -88,16 +88,16 @@ def get_slides_drive_oauth_creds():
     'storageQuotaExceeded' yang muncul kalau upload gambar dilakukan pakai
     service account (service account tidak punya storage quota di Drive).
 
-    Perlu tiga secrets tambahan: google_client_id, google_client_secret,
-    google_refresh_token (refresh token milik akun Google biasa, bukan service
+    Perlu tiga secrets tambahan: GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET,
+    GOOGLE_REFRESH_TOKEN (refresh token milik akun Google biasa, bukan service
     account -- lihat cara generate-nya di app__6_.py / get_refresh_token.py).
     """
     creds = OAuthCredentials(
         token=None,
-        refresh_token=st.secrets["google_refresh_token"],
+        refresh_token=st.secrets["GOOGLE_REFRESH_TOKEN"],
         token_uri=OAUTH_TOKEN_ENDPOINT,
-        client_id=st.secrets["google_client_id"],
-        client_secret=st.secrets["google_client_secret"],
+        client_id=st.secrets["GOOGLE_CLIENT_ID"],
+        client_secret=st.secrets["GOOGLE_CLIENT_SECRET"],
         scopes=OAUTH_SCOPES.split(),
     )
     creds.refresh(GoogleAuthRequest())
