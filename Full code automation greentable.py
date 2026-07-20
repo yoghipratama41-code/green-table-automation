@@ -487,6 +487,214 @@ def process_raw_data_puncak(raw_data):
 
 
 # ==========================================
+# 4B. MODUL BARU: BANDINGKAN THIS WEEK VS LAST WEEK
+# (Tidak mengubah / memanggil ulang logika ekstraksi di atas apa adanya,
+#  tab ini TIDAK melakukan upload ke Google Sheets)
+# ==========================================
+def compare_tempoh_tiers(tiers_this, tiers_last):
+    """Bandingkan tiers dalam satu Tempoh, index-matched (tier ke-0 = entry, dst).
+    Balikin (list_baris_bullet, ada_perubahan_bool)."""
+    lines = []
+    any_change = False
+    n = max(len(tiers_this), len(tiers_last))
+    for i in range(n):
+        t_this = tiers_this[i] if i < len(tiers_this) else None
+        t_last = tiers_last[i] if i < len(tiers_last) else None
+
+        if t_this is None:
+            lines.append(f"{t_last['jumlah_pesanan']} orders: removed this week (was {t_last['biasa']}/{t_last['berganda']}).")
+            any_change = True
+            continue
+        if t_last is None:
+            lines.append(f"{t_this['jumlah_pesanan']} orders: new this week ({t_this['biasa']}/{t_this['berganda']}).")
+            any_change = True
+            continue
+
+        label = "Entry tier" if i == 0 else f"{t_this['jumlah_pesanan']} orders"
+        target_changed = t_this["jumlah_pesanan"] != t_last["jumlah_pesanan"]
+        biasa_changed = t_this["biasa"] != t_last["biasa"]
+        berganda_changed = t_this["berganda"] != t_last["berganda"]
+
+        if not target_changed and not biasa_changed and not berganda_changed:
+            lines.append(f"{label}: no change ({t_this['biasa']}/{t_this['berganda']}).")
+            continue
+
+        any_change = True
+        segs = []
+        if target_changed:
+            d = "up" if t_this["jumlah_pesanan"] > t_last["jumlah_pesanan"] else "down"
+            segs.append(f"target {d} from {t_last['jumlah_pesanan']} to {t_this['jumlah_pesanan']} orders")
+
+        if biasa_changed and berganda_changed:
+            old_b, new_b = to_number(t_last["biasa"]), to_number(t_this["biasa"])
+            old_g, new_g = to_number(t_last["berganda"]), to_number(t_this["berganda"])
+            same_dir = (
+                old_b not in ("", None) and old_g not in ("", None)
+                and (new_b - old_b) * (new_g - old_g) >= 0
+            )
+            if same_dir:
+                d = "up" if (new_b + new_g) >= (old_b + old_g) else "down"
+                segs.append(f"bonus {d} ({t_last['biasa']}/{t_last['berganda']} → {t_this['biasa']}/{t_this['berganda']})")
+            else:
+                bd = "up" if new_b > old_b else "down"
+                gd = "up" if new_g > old_g else "down"
+                segs.append(f"Biasa {bd} ({t_last['biasa']} → {t_this['biasa']})")
+                segs.append(f"Berganda {gd} ({t_last['berganda']} → {t_this['berganda']})")
+        elif biasa_changed:
+            d = "up" if to_number(t_this["biasa"]) > to_number(t_last["biasa"]) else "down"
+            segs.append(f"Biasa {d} ({t_last['biasa']} → {t_this['biasa']})")
+        elif berganda_changed:
+            d = "up" if to_number(t_this["berganda"]) > to_number(t_last["berganda"]) else "down"
+            segs.append(f"Berganda {d} ({t_last['berganda']} → {t_this['berganda']})")
+
+        lines.append(f"{label}: " + ", ".join(segs) + ".")
+
+    return lines, any_change
+
+
+def compare_bonus_harian(harian_this, harian_last):
+    """Balikin (ada_perubahan_bool, teks_satu_baris) untuk section Daily Bonus."""
+    if not harian_this or not harian_last:
+        return True, "Tidak ada data Bonus Harian yang bisa dibandingkan pada salah satu gambar."
+
+    same_target = harian_this["jumlah_pesanan"] == harian_last["jumlah_pesanan"]
+    same_bonus = harian_this["bonus"] == harian_last["bonus"]
+    if same_target and same_bonus:
+        return False, f"No change — still {harian_this['bonus']} for {harian_this['jumlah_pesanan']} orders."
+
+    segs = []
+    if not same_target:
+        d = "up" if harian_this["jumlah_pesanan"] > harian_last["jumlah_pesanan"] else "down"
+        segs.append(f"target {d} from {harian_last['jumlah_pesanan']} to {harian_this['jumlah_pesanan']} orders")
+    if not same_bonus:
+        d = "up" if to_number(harian_this["bonus"]) > to_number(harian_last["bonus"]) else "down"
+        segs.append(f"bonus {d} ({harian_last['bonus']} → {harian_this['bonus']})")
+    text = ", ".join(segs)
+    return True, text[0].upper() + text[1:] + "."
+
+
+def compare_peak_fare(df_this, df_last):
+    """Bandingkan Tambang Puncak berdasarkan Day + Hour (mengabaikan tanggal pasti,
+    karena yang relevan buat rider adalah pola hari & jamnya).
+    Balikin (ada_perubahan_bool, list_baris_bullet)."""
+    merged = pd.merge(
+        df_this[["Day", "Hour", "Bonus"]],
+        df_last[["Day", "Hour", "Bonus"]],
+        on=["Day", "Hour"], how="outer", suffixes=("_this", "_last"), indicator=True,
+    )
+    diffs = merged[(merged["_merge"] != "both") | (merged["Bonus_this"] != merged["Bonus_last"])]
+    if diffs.empty:
+        return False, ["No change across all hours (AM and PM), all days."]
+
+    day_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    diffs = diffs.copy()
+    diffs["day_rank"] = diffs["Day"].apply(lambda d: day_order.index(d) if d in day_order else 99)
+    diffs = diffs.sort_values(["day_rank", "Hour"])
+
+    def hour_label(h):
+        return pd.Timestamp(year=2000, month=1, day=1, hour=int(h)).strftime("%I %p").lstrip("0")
+
+    lines = []
+    for day in day_order:
+        day_diffs = diffs[diffs["Day"] == day]
+        if day_diffs.empty:
+            continue
+        entries = []
+        for _, row in day_diffs.iterrows():
+            hl = hour_label(row["Hour"])
+            old_v, new_v = row.get("Bonus_last"), row.get("Bonus_this")
+            if pd.isna(old_v):
+                entries.append(f"{hl}: new ({new_v * 100:.0f}%)")
+            elif pd.isna(new_v):
+                entries.append(f"{hl}: removed (was {old_v * 100:.0f}%)")
+            else:
+                entries.append(f"{hl}: {old_v * 100:.0f}% → {new_v * 100:.0f}%")
+        lines.append(f"{day}: " + ", ".join(entries) + ".")
+    return True, lines
+
+
+def build_summary_lines(tempoh_results, harian_changed, puncak_changed):
+    lines = []
+
+    if not puncak_changed:
+        lines.append("Peak Fare (Tambang Puncak) is fully unchanged this week.")
+    else:
+        lines.append("Peak Fare (Tambang Puncak) has some changes this week — see details below.")
+
+    changed_labels = [t["label"] for t in tempoh_results if t["changed"]]
+    unchanged_labels = [t["label"] for t in tempoh_results if not t["changed"]]
+    if not changed_labels:
+        lines.append("Weekly Bonus (Bonus Mingguan) is unchanged across all Tempoh this week.")
+    else:
+        parts = []
+        if unchanged_labels:
+            parts.append(f"{', '.join(unchanged_labels)} unchanged")
+        parts.append(f"{', '.join(changed_labels)} has some tweaks — see details below")
+        lines.append("Weekly Bonus (Bonus Mingguan): " + "; ".join(parts) + ".")
+
+    if not harian_changed:
+        lines.append("Everything else (Daily Bonus, Pick-up Distance Bonus, New Area Bonus, Ciri Slot Pilihan) stays the same.")
+    else:
+        lines.append("Daily Bonus has changes this week — see details below. Pick-up Distance Bonus, New Area Bonus, and Ciri Slot Pilihan stay the same.")
+
+    return lines
+
+
+def build_full_comparison_report(mingguan_this, harian_this, df_puncak_this,
+                                   mingguan_last, harian_last, df_puncak_last):
+    """Rangkai semua hasil ekstraksi This Week vs Last Week jadi teks siap-copy,
+    mengikuti format laporan mingguan Yoghi (Summary -> Weekly Bonus -> Daily Bonus
+    -> Peak Fare -> Pick-up/New Area/Ciri Slot Pilihan -> sign-off)."""
+    last_by_label = {p["tempoh_label"]: p for p in mingguan_last}
+    tempoh_results = []
+    mingguan_detail_lines = []
+
+    for period in mingguan_this:
+        label = period["tempoh_label"]
+        date_range = period["date_range"]
+        last_period = last_by_label.get(label)
+
+        if last_period is None:
+            tempoh_results.append({"label": label, "changed": True})
+            mingguan_detail_lines.append(f"   * {label} ({date_range}): New period this week — no prior data to compare.")
+            continue
+
+        tier_lines, changed = compare_tempoh_tiers(period["tiers"], last_period["tiers"])
+        tempoh_results.append({"label": label, "changed": changed})
+
+        if not changed:
+            mingguan_detail_lines.append(f"   * {label} ({date_range}): No change — same targets and payouts as last week's {label}.")
+        else:
+            mingguan_detail_lines.append(f"   * {label} ({date_range}) vs last week's {label}:")
+            for tl in tier_lines:
+                mingguan_detail_lines.append(f"      * {tl}")
+
+    harian_changed, harian_text = compare_bonus_harian(harian_this, harian_last)
+    puncak_changed, puncak_lines = compare_peak_fare(df_puncak_this, df_puncak_last)
+    summary_lines = build_summary_lines(tempoh_results, harian_changed, puncak_changed)
+
+    out = ["* Summary"]
+    out += [f"   * {s}" for s in summary_lines]
+
+    out.append("* Weekly Bonus / Bonus Mingguan")
+    out += mingguan_detail_lines
+
+    out.append("* Daily Bonus / Bonus Harian")
+    out.append(f"   * {harian_text}")
+
+    out.append("* Peak Fare / Tambang Puncak")
+    out += [f"   * {pl}" for pl in puncak_lines]
+
+    out.append("* Pick-up Distance Bonus, New Area Bonus, Ciri Slot Pilihan")
+    out.append("   * No change.")
+
+    out.append("")
+    out.append("Thank you everyone, and we'll keep you posted on any further updates!")
+
+    return "\n".join(out)
+
+
+# ==========================================
 # 5. MODUL: GEMS AUTOMATOR & SLIDES INTEGRATION
 # ==========================================
 @st.cache_data
@@ -843,8 +1051,8 @@ if uploaded_image is not None:
 
 st.divider()
 
-tab_mingguan, tab_puncak, tab_gems = st.tabs(
-    ["📅 Bonus Mingguan & Harian", "⛰️ Tambang Puncak", "💎 Gems Automator"]
+tab_mingguan, tab_puncak, tab_gems, tab_compare = st.tabs(
+    ["📅 Bonus Mingguan & Harian", "⛰️ Tambang Puncak", "💎 Gems Automator", "🔄 Compare This Week vs Last Week"]
 )
 
 # ------------------------------------------
@@ -1079,3 +1287,76 @@ with tab_gems:
         
         st.balloons()
         st.success("🎉 Seluruh rangkaian otomasi data Sheets dan visualisasi Slides selesai diproses!")
+
+# ------------------------------------------
+# TAB 4 — COMPARE THIS WEEK VS LAST WEEK (BARU)
+# Reuse fungsi ekstraksi Bonus Mingguan & Tambang Puncak apa adanya.
+# TIDAK ada upload ke Google Sheets di tab ini — cuma ekstraksi + banding +
+# output teks laporan siap-copy.
+# ------------------------------------------
+with tab_compare:
+    st.subheader("🔄 Bandingkan This Week vs Last Week")
+    st.caption(
+        "Upload gambar Greentable minggu ini & minggu lalu. Keduanya akan diekstrak "
+        "(pakai logika Bonus Mingguan & Tambang Puncak yang sama), lalu dibandingkan "
+        "otomatis jadi teks laporan siap-copy. Tidak ada data yang diupload ke Google Sheets."
+    )
+
+    col_this, col_last = st.columns(2)
+    with col_this:
+        st.markdown("**📅 Gambar This Week**")
+        img_this_file = st.file_uploader(
+            "Upload gambar minggu ini", type=["jpg", "jpeg", "png"], key="compare_this_week_uploader"
+        )
+        if img_this_file is not None:
+            st.image(img_this_file, caption="Preview This Week", width=280)
+    with col_last:
+        st.markdown("**📆 Gambar Last Week**")
+        img_last_file = st.file_uploader(
+            "Upload gambar minggu lalu", type=["jpg", "jpeg", "png"], key="compare_last_week_uploader"
+        )
+        if img_last_file is not None:
+            st.image(img_last_file, caption="Preview Last Week", width=280)
+
+    if not gemini_api_key:
+        st.warning("⚠️ Modul ini butuh Gemini API Key di sidebar (dipakai untuk Tambang Puncak & fallback Bonus Mingguan).")
+
+    run_compare_disabled = not (img_this_file and img_last_file and gemini_api_key)
+    if st.button("🚀 Ekstrak & Bandingkan", key="run_compare", disabled=run_compare_disabled):
+        compare_temp_dir = "temp_uploads_compare"
+        os.makedirs(compare_temp_dir, exist_ok=True)
+
+        path_this = os.path.join(compare_temp_dir, "this_week_" + img_this_file.name)
+        with open(path_this, "wb") as f:
+            f.write(img_this_file.getbuffer())
+
+        path_last = os.path.join(compare_temp_dir, "last_week_" + img_last_file.name)
+        with open(path_last, "wb") as f:
+            f.write(img_last_file.getbuffer())
+
+        try:
+            with st.status("⏳ Mengekstrak gambar This Week...", expanded=True) as status_this:
+                mingguan_this, harian_this = extract_mingguan(reader, path_this, gemini_api_key, log=st.write)
+                raw_puncak_this = extract_peak_fare(path_this, gemini_api_key, log=st.write)
+                df_puncak_this = process_raw_data_puncak(raw_puncak_this)
+                status_this.update(label="✅ Ekstraksi This Week selesai.", state="complete")
+
+            with st.status("⏳ Mengekstrak gambar Last Week...", expanded=True) as status_last:
+                mingguan_last, harian_last = extract_mingguan(reader, path_last, gemini_api_key, log=st.write)
+                raw_puncak_last = extract_peak_fare(path_last, gemini_api_key, log=st.write)
+                df_puncak_last = process_raw_data_puncak(raw_puncak_last)
+                status_last.update(label="✅ Ekstraksi Last Week selesai.", state="complete")
+
+            report_text = build_full_comparison_report(
+                mingguan_this, harian_this, df_puncak_this,
+                mingguan_last, harian_last, df_puncak_last,
+            )
+            st.session_state["compare_report_text"] = report_text
+            st.success("🎉 Perbandingan selesai! Pesan siap di-copy di bawah.")
+        except Exception as e:
+            st.error(f"❌ Gagal memproses perbandingan: {e}")
+
+    if "compare_report_text" in st.session_state:
+        st.divider()
+        st.markdown("### 📋 Pesan Siap Copy")
+        st.code(st.session_state["compare_report_text"], language="markdown")
