@@ -34,7 +34,8 @@ TAB_PUNCAK = "Bonus Tambang Puncak_This Week"
 
 # Gems Automator Configuration
 GEMS_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1W6t8fCOPB_dFlWnzHSpVJ66tAnOcHHnMn1jXtHfC2S4/edit?usp=sharing"
-GEMS_SLIDES_ID = "175o7VUG_h7IFAlgiin-2clS1dt-9O4WwD4XnJTozHgc"  # Target Slide ID sesuai instruksi
+GEMS_SLIDES_ID = "175o7VUG_h7IFAlgiin-2clS1dt-9O4WwD4XnJTozHgc"  # Target Slide ID Pertama
+GEMS_SLIDES_ID_2 = "1PmJhzr95FXirUM2YihGey7fgQBsNnczNxZwxkKFwXN8" # Target Slide ID Kedua (Baru)
 GEMS_MUSIC_PATH = "assets/bgm.mp3"
 GEMS_APPS_SCRIPT_WEBHOOK_URL = st.secrets.get("apps_script_webhook_url", "")
 
@@ -1273,6 +1274,8 @@ with tab_gems:
             st.subheader("📊 Memulai Sinkronisasi Presentasi Google Slides...")
             log_slides = st.container()
             try:
+                # Update untuk Template Slide 1
+                log_slides.write("📝 **Memproses Template Slide Pertama...**")
                 uploaded_ids, new_presentation_id = push_to_google_slides(
                     slide_id=GEMS_SLIDES_ID,
                     tier=selected_tier,
@@ -1280,8 +1283,20 @@ with tab_gems:
                     processed_images_list=slides_payload_list,
                     log_box=log_slides
                 )
-                st.success("🎉 Salinan Google Slides berhasil dibuat & diperbarui dengan sempurna!")
-                st.info(f"🔗 Tautan Presentasi Hasil: [Buka Google Slides](https://docs.google.com/presentation/d/{new_presentation_id}/edit)")
+                
+                # Update untuk Template Slide 2
+                log_slides.write("📝 **Memproses Template Slide Kedua...**")
+                uploaded_ids_2, new_presentation_id_2 = push_to_google_slides(
+                    slide_id=GEMS_SLIDES_ID_2,
+                    tier=selected_tier,
+                    vehicle=selected_vehicle,
+                    processed_images_list=slides_payload_list,
+                    log_box=log_slides
+                )
+                
+                st.success("🎉 Kedua Salinan Google Slides berhasil dibuat & diperbarui dengan sempurna!")
+                st.info(f"🔗 Tautan Presentasi Hasil (Template 1): [Buka Google Slides](https://docs.google.com/presentation/d/{new_presentation_id}/edit)")
+                st.info(f"🔗 Tautan Presentasi Hasil (Template 2): [Buka Google Slides](https://docs.google.com/presentation/d/{new_presentation_id_2}/edit)")
             except Exception as slide_err:
                 st.error(f"⚠️ Gagal memperbarui Google Slides: {slide_err}")
         
