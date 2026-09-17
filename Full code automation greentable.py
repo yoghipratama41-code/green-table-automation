@@ -737,15 +737,6 @@ def render_music_player(file_path):
     """
     components.html(player_html, height=60)
 
-def enhance_image_for_ocr(path):
-    img = Image.open(path).convert("L")
-    img = img.resize((img.width * 2, img.height * 2), Image.LANCZOS)
-    img = ImageEnhance.Contrast(img).enhance(2.0)
-    img = ImageEnhance.Sharpness(img).enhance(2.0)
-    enhanced_path = "enhanced_" + os.path.basename(path)
-    img.save(enhanced_path)
-    return enhanced_path
-
 def extract_gems_rewards(ocr_result_list):
     start_idx, end_idx = -1, len(ocr_result_list)
     for idx, text in enumerate(ocr_result_list):
@@ -790,31 +781,43 @@ def analisis_dengan_ultimate_retry(model, prompt, gambar_list, max_retry=5):
 
 def extract_via_gemini_gems(image_path, api_key):
     if not api_key:
+        st.error("⚠️ API Key Gemini belum diisi di sidebar.")
         return [], []
-    try:
-        genai.configure(api_key=api_key)
-        models = [m.name for m in genai.list_models() if "generateContent" in m.supported_generation_methods]
-        model_name = next((m for m in models if "1.5-flash" in m), next((m for m in models if "flash" in m), models[0]))
-        gemini_model = genai.GenerativeModel(model_name)
-    except Exception as e:
-        st.error(f"⚠️ Gagal setup Gemini: {e}")
-        return [], []
+    
     prompt = """Look at this screenshot of a delivery rider mission app.
 Find the "TARGET & REWARD" section. It contains exactly 3 tiers, each with:
 - a "gems" target number (a small whole number)
 - a corresponding "S$" reward amount
 Return ONLY a raw JSON object: {"gems": [g1, g2, g3], "rewards": [r1, r2, r3]}"""
+    
     try:
         img = Image.open(image_path)
-        teks_raw = analisis_dengan_ultimate_retry(gemini_model, prompt, [img], max_retry=3)
-        clean_text = re.sub(r"^```json\s*|\s*```$", "", teks_raw.strip())
-        data = json.loads(clean_text)
-        gems = sorted([int(g) for g in data.get("gems", [])])
-        rewards = sorted([float(r) for r in data.get("rewards", [])])
-        if len(gems) == 3 and len(rewards) == 3:
-            return gems, rewards
+        model_fallback_list = get_model_fallback_list(api_key)
+        
+        for model_name in model_fallback_list:
+            gemini_model = genai.GenerativeModel(model_name)
+            nama_model_pendek = model_name.split("/")[-1]
+            try:
+                teks_raw = analisis_dengan_ultimate_retry(gemini_model, prompt, [img], max_retry=2)
+                clean_text = re.sub(r"^```json\s*|\s*```$", "", teks_raw.strip())
+                data = json.loads(clean_text)
+                
+                gems = sorted([int(g) for g in data.get("gems", [])])
+                rewards = sorted([float(r) for r in data.get("rewards", [])])
+                
+                if len(gems) == 3 and len(rewards) == 3:
+                    st.write(f"✅ AI Berhasil ekstrak pakai model **{nama_model_pendek}**.")
+                    return gems, rewards
+                else:
+                    st.warning(f"⚠️ [{nama_model_pendek}] format JSON tidak lengkap, coba model lain...")
+                    continue
+            except Exception as e:
+                st.warning(f"⚠️ [{nama_model_pendek}] gagal ({e}), coba model berikutnya...")
+                continue
+                
         return [], []
-    except Exception:
+    except Exception as e:
+        st.error(f"⚠️ Terjadi error saat memproses AI: {e}")
         return [], []
 
 def get_target_cells(tier, vehicle):
@@ -1203,14 +1206,8 @@ with tab_gems:
                 gems_found, rewards_found, _ = extract_gems_rewards(result)
 
                 if len(gems_found) != 3 or len(rewards_found) != 3:
-                    st.warning("⚠️ Pembacaan normal gagal. Mencoba Image Enhancement...")
-                    enhanced_path = enhance_image_for_ocr(temp_path)
-                    res_v2 = reader.readtext(enhanced_path, detail=0, text_threshold=0.4, low_text=0.3)
-                    gems_found, rewards_found, _ = extract_gems_rewards(res_v2)
-
-                    if len(gems_found) != 3 or len(rewards_found) != 3:
-                        st.warning("⚠️ Masih gagal. Mencoba Fallback ke Gemini Vision API...")
-                        gems_found, rewards_found = extract_via_gemini_gems(temp_path, gemini_api_key)
+                    st.warning("⚠️ Pembacaan OCR normal gagal. Langsung mencoba Fallback ke AI...")
+                    gems_found, rewards_found = extract_via_gemini_gems(temp_path, gemini_api_key)
 
                 if len(gems_found) == 3 and len(rewards_found) == 3:
                     pairs = list(zip(gems_found, rewards_found))
@@ -1221,7 +1218,7 @@ with tab_gems:
                         'date_obj': current_dt_obj
                     })
                 else:
-                    st.error("❌ Ekstraksi angka gagal total pada berkas ini. Silakan periksa manual.")
+                    st.error("❌ Ekstraksi angka gagal total pada berkas ini (bahkan dengan AI). Silakan periksa manual.")
                     continue
 
                 # --- 1. PROSES UPDATE GOOGLE SHEETS (LOGIKA LAMA DITEPATI & TIDAK BERUBAH) ---
