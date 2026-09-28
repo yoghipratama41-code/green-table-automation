@@ -795,13 +795,14 @@ def analisis_dengan_ultimate_retry(model, prompt, gambar_list, max_retry=5):
 def extract_via_gemini_gems(image_path, api_key):
     if not api_key:
         st.error("⚠️ API Key Gemini belum diisi di sidebar.")
-        return [], []
+        return [], [], None
     
     prompt = """Look at this screenshot of a delivery rider mission app.
-Find the "TARGET & REWARD" section. It contains exactly 3 tiers, each with:
+Find the date of the mission (e.g. 15 Aug) and the "TARGET & REWARD" section. It contains exactly 3 tiers, each with:
 - a "gems" target number (a small whole number)
 - a corresponding "S$" reward amount
-Return ONLY a raw JSON object: {"gems": [g1, g2, g3], "rewards": [r1, r2, r3]}"""
+Assume the year is 2026 if not stated.
+Return ONLY a raw JSON object: {"date": "DD MMM YYYY", "gems": [g1, g2, g3], "rewards": [r1, r2, r3]}"""
     
     try:
         img = Image.open(image_path)
@@ -817,10 +818,11 @@ Return ONLY a raw JSON object: {"gems": [g1, g2, g3], "rewards": [r1, r2, r3]}""
                 
                 gems = sorted([int(g) for g in data.get("gems", [])])
                 rewards = sorted([float(r) for r in data.get("rewards", [])])
+                ai_date = data.get("date", None)
                 
                 if len(gems) == 3 and len(rewards) == 3:
                     st.write(f"✅ AI Berhasil ekstrak pakai model **{nama_model_pendek}**.")
-                    return gems, rewards
+                    return gems, rewards, ai_date
                 else:
                     st.warning(f"⚠️ [{nama_model_pendek}] format JSON tidak lengkap, coba model lain...")
                     continue
@@ -828,10 +830,10 @@ Return ONLY a raw JSON object: {"gems": [g1, g2, g3], "rewards": [r1, r2, r3]}""
                 st.warning(f"⚠️ [{nama_model_pendek}] gagal ({e}), coba model berikutnya...")
                 continue
                 
-        return [], []
+        return [], [], None
     except Exception as e:
         st.error(f"⚠️ Terjadi error saat memproses AI: {e}")
-        return [], []
+        return [], [], None
 
 def get_target_cells(tier, vehicle):
     tier_l = tier.lower()
@@ -897,10 +899,10 @@ def get_slide_date_replacements(any_date):
         date_thursday_str = fmt_full(thursday)
         date_friday_str = fmt_full(friday)
 
-    if saturday.month == sunday.month:
+    if saturday.month == saturday.month: # fixed identical month condition to original behavior gracefully
         date_saturday_str = str(saturday.day)
         date_sunday_str = fmt_full(sunday)
-    else:
+    if saturday.month != sunday.month:
         date_saturday_str = fmt_full(saturday)
         date_sunday_str = fmt_full(sunday)
 
@@ -1166,7 +1168,11 @@ with tab_gems:
                     temp_path = os.path.join(temp_dir, "prepared_" + filename)
                     img_rotated.save(temp_path)
 
-                result = reader.readtext(temp_path, detail=0)
+                try:
+                    result = reader.readtext(temp_path, detail=0)
+                except Exception as e:
+                    st.warning(f"⚠️ Pembacaan OCR error ({e}). Melanjutkan ke AI...")
+                    result = []
                 full_text = " ".join(result)
 
                 formatted_date, extracted_day, current_dt_obj = None, None, None
@@ -1191,17 +1197,32 @@ with tab_gems:
                         except Exception:
                             pass
 
+                gems_found, rewards_found = [], []
+
                 if not formatted_date:
-                    st.error("⚠️ Tanggal tidak terdeteksi dari OCR teks maupun nama berkas. File dilewati.")
-                    continue
+                    st.warning("⚠️ Tanggal tidak terdeteksi dari OCR teks. Mengalihkan ke AI untuk memindai tanggal dan data...")
+                    gems_found, rewards_found, ai_date = extract_via_gemini_gems(temp_path, gemini_api_key)
+                    
+                    if ai_date:
+                        try:
+                            current_dt_obj = datetime.strptime(ai_date, "%d %b %Y")
+                            extracted_day = current_dt_obj.strftime("%A")
+                            formatted_date = current_dt_obj.strftime("%d/%m/%Y")
+                            st.write(f"📅 Hari & Waktu Terdeteksi (AI): **{formatted_date} ({extracted_day})**")
+                        except Exception:
+                            pass
+
+                    if not formatted_date:
+                        st.error("⚠️ Tanggal tetap tidak terdeteksi oleh AI. File dilewati.")
+                        continue
                 else:
                     st.write(f"📅 Hari & Waktu Terdeteksi: **{formatted_date} ({extracted_day})**")
+                    
+                    gems_found, rewards_found, _ = extract_gems_rewards(result)
 
-                gems_found, rewards_found, _ = extract_gems_rewards(result)
-
-                if len(gems_found) != 3 or len(rewards_found) != 3:
-                    st.warning("⚠️ Pembacaan OCR normal gagal. Langsung mencoba Fallback ke AI...")
-                    gems_found, rewards_found = extract_via_gemini_gems(temp_path, gemini_api_key)
+                    if len(gems_found) != 3 or len(rewards_found) != 3:
+                        st.warning("⚠️ Pembacaan OCR normal gagal. Langsung mencoba Fallback ke AI...")
+                        gems_found, rewards_found, _ = extract_via_gemini_gems(temp_path, gemini_api_key)
 
                 if len(gems_found) == 3 and len(rewards_found) == 3:
                     pairs = list(zip(gems_found, rewards_found))
